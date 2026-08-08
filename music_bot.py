@@ -45,7 +45,7 @@ def search_song(query):
     conn.close()
     return results
 
-# ===================== ПОИСК =====================
+# ===================== ПОИСК НА SPOTIFY =====================
 def search_spotify(query, max_results=20):
     try:
         from spotdl import search
@@ -65,6 +65,7 @@ def search_spotify(query, max_results=20):
         print(f"Ошибка Spotify: {e}")
         return []
 
+# ===================== ПОИСК НА SOUNDCLOUD =====================
 def search_soundcloud(query, max_results=10):
     ydl_opts = {'quiet': True, 'no_warnings': True, 'extract_flat': True, 'socket_timeout': 10}
     try:
@@ -85,6 +86,7 @@ def search_soundcloud(query, max_results=10):
         print(f"Ошибка SoundCloud: {e}")
     return []
 
+# ===================== ПОИСК НА YOUTUBE =====================
 def search_youtube(query, max_results=10):
     ydl_opts = {'quiet': True, 'no_warnings': True, 'extract_flat': True, 'socket_timeout': 10}
     try:
@@ -106,6 +108,7 @@ def search_youtube(query, max_results=10):
         print(f"Ошибка YouTube: {e}")
     return []
 
+# ===================== УНИВЕРСАЛЬНЫЙ ПОИСК =====================
 def search_all(query, max_results=20):
     results = search_spotify(query, max_results)
     if results:
@@ -116,7 +119,7 @@ def search_all(query, max_results=20):
     results = search_youtube(query, max_results)
     return results
 
-# ===================== СКАЧИВАНИЕ =====================
+# ===================== СКАЧИВАНИЕ (ИСПРАВЛЕННОЕ) =====================
 async def download_from_spotify(url, title, artist):
     try:
         safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()
@@ -141,6 +144,7 @@ async def download_from_url(url, title, uploader):
         'ignoreerrors': True,
         'nooverwrites': False,
         'socket_timeout': 30,
+        'retries': 5,
     }
     try:
         safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()
@@ -149,7 +153,7 @@ async def download_from_url(url, title, uploader):
             for file in os.listdir(MUSIC_FOLDER):
                 if file.endswith('.mp3'):
                     file_path = os.path.join(MUSIC_FOLDER, file)
-                    if os.path.getctime(file_path) > time.time() - 60:
+                    if os.path.getctime(file_path) > time.time() - 120:
                         new_path = os.path.join(MUSIC_FOLDER, f"{safe_title}.mp3")
                         if not os.path.exists(new_path):
                             os.rename(file_path, new_path)
@@ -162,7 +166,7 @@ async def download_from_url(url, title, uploader):
 
 # ===================== КОМАНДЫ =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎵 Просто напиши название песни или исполнителя.", parse_mode='Markdown')
+    await update.message.reply_text("🎵 Просто напиши название песни или исполнителя.")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text.strip()
@@ -170,6 +174,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Слишком короткий запрос")
         return
     
+    # Проверяем базу
     results = search_song(query)
     if results:
         title, artist, file_path = results[0]
@@ -202,10 +207,12 @@ async def show_page(update, context, page):
     end_idx = min(start_idx + per_page, len(videos))
     page_videos = videos[start_idx:end_idx]
     
+    # МИНИМАЛИСТИЧНЫЙ СПИСОК (как на первом скриншоте)
     message = "🎵 *Выберите песню:*\n\n"
     for i, video in enumerate(page_videos, start=start_idx + 1):
         message += f"{i}. {video['uploader']} - {video['title']}\n"
     
+    # Кнопки с номерами (только цифры)
     buttons = []
     row = []
     for i in range(start_idx + 1, end_idx + 1):
@@ -216,6 +223,7 @@ async def show_page(update, context, page):
     if row:
         buttons.append(row)
     
+    # Навигация
     nav_buttons = []
     if total_pages > 1:
         nav_buttons.append(InlineKeyboardButton(f"{page + 1} / {total_pages}", callback_data="page_info"))
@@ -225,10 +233,6 @@ async def show_page(update, context, page):
         nav_buttons.append(InlineKeyboardButton("▶️", callback_data=f"page_{page+1}"))
     if nav_buttons:
         buttons.append(nav_buttons)
-    
-    query = context.user_data.get('search_query', '')
-    if query:
-        buttons.append([InlineKeyboardButton(f"🔍 Искать по исполнителю: {query}", callback_data=f"search_artist_{query}")])
     
     buttons.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel")])
     
@@ -254,18 +258,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         page = int(data.split("_")[1])
         await show_page(update, context, page)
         return
-    if data.startswith("search_artist_"):
-        artist = data.replace("search_artist_", "")
-        await query.edit_message_text(f"🔍 Поиск по запросу: {artist}")
-        videos = search_all(artist, max_results=20)
-        if videos:
-            context.user_data['search_results'] = videos
-            context.user_data['search_page'] = 0
-            context.user_data['search_query'] = artist
-            await show_page(update, context, 0)
-        else:
-            await query.message.reply_text("❌ Ничего не найдено")
-        return
     if data.startswith("select_"):
         index = int(data.split("_")[1])
         videos = context.user_data.get('search_results', [])
@@ -274,10 +266,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         selected = videos[index]
         await query.edit_message_text(f"⬇️ {selected['uploader']} - {selected['title']}")
+        
         if selected['source'] == 'Spotify':
             title, artist, file_path = await download_from_spotify(selected['url'], selected['title'], selected['uploader'])
         else:
             title, artist, file_path = await download_from_url(selected['url'], selected['title'], selected['uploader'])
+        
         if title and os.path.exists(file_path):
             add_song(title, artist, file_path, selected['source'])
             size_bytes = os.path.getsize(file_path)
@@ -299,7 +293,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with open(file_path, 'rb') as audio:
                 await query.message.reply_audio(audio=audio, title=title, performer=artist, caption=caption)
         else:
-            await query.message.reply_text("❌ Ошибка скачивания")
+            await query.message.reply_text("❌ Ошибка скачивания. Попробуй другой источник.")
 
 def main():
     init_db()
