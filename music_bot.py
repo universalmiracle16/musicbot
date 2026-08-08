@@ -47,7 +47,7 @@ def search_song(query):
     return results
 
 # ===================== ПОИСК НА SPOTIFY =====================
-def search_spotify(query, max_results=15):
+def search_spotify(query, max_results=20):
     try:
         from spotdl import search
         from spotdl.types.song import Song
@@ -103,7 +103,7 @@ def search_soundcloud(query, max_results=10):
     
     return []
 
-# ===================== ПОИСК НА YOUTUBE (ЗАПАСНОЙ) =====================
+# ===================== ПОИСК НА YOUTUBE =====================
 def search_youtube(query, max_results=10):
     ydl_opts = {
         'quiet': True,
@@ -140,7 +140,7 @@ def search_youtube(query, max_results=10):
     return []
 
 # ===================== УНИВЕРСАЛЬНЫЙ ПОИСК =====================
-def search_all(query, max_results=15):
+def search_all(query, max_results=20):
     results = search_spotify(query, max_results)
     if results:
         return results
@@ -205,12 +205,11 @@ async def download_from_url(url, title, uploader):
         print(f"Ошибка скачивания: {e}")
         return None, None, None
 
-# ===================== КОМАНДЫ =====================
+# ===================== КОМАНДА /START =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎵 *Музыкальный Бот*\n\n"
-        "Просто напиши название песни или исполнителя.\n"
-        "Ищу на Spotify → SoundCloud → YouTube.",
+        "Просто напиши название песни или исполнителя.",
         parse_mode='Markdown'
     )
 
@@ -231,7 +230,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
     
     await update.message.reply_text(f"🔍 Поиск по запросу: {query}")
-    videos = search_all(query, max_results=15)
+    videos = search_all(query, max_results=20)
     
     if not videos:
         await update.message.reply_text("❌ Ничего не найдено")
@@ -243,7 +242,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await show_page(update, context, 0)
 
-# ===================== ПОКАЗ СПИСКА (МИНИМАЛИСТИЧНО) =====================
+# ===================== ПОКАЗ СПИСКА =====================
 async def show_page(update, context, page):
     videos = context.user_data.get('search_results', [])
     if not videos:
@@ -256,13 +255,13 @@ async def show_page(update, context, page):
     end_idx = min(start_idx + per_page, len(videos))
     page_videos = videos[start_idx:end_idx]
     
-    # Минималистичный список — только названия
-    message = "🎵 *Выберите трек*\n\n"
+    # Стиль как на скриншоте — просто список с дефисами
+    message = "🎵 *Выберите песню:*\n\n"
     
     for i, video in enumerate(page_videos, start=start_idx + 1):
-        message += f"{i}. {video['uploader']} - {video['title']}\n"
+        message += f"- {video['uploader']} - {video['title']}\n"
     
-    # Кнопки с номерами
+    # Кнопки — как на скриншоте
     buttons = []
     row = []
     for i in range(start_idx + 1, end_idx + 1):
@@ -273,7 +272,7 @@ async def show_page(update, context, page):
     if row:
         buttons.append(row)
     
-    # Кнопки навигации
+    # Навигация
     nav_buttons = []
     if total_pages > 1:
         nav_buttons.append(InlineKeyboardButton(f"{page + 1} / {total_pages}", callback_data="page_info"))
@@ -323,17 +322,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if data.startswith("search_artist_"):
         artist = data.replace("search_artist_", "")
-        # Ищем по исполнителю
-        await query.edit_message_text(f"🔍 Ищу исполнителя: {artist}")
-        # Очищаем результаты и ищем заново
-        videos = search_all(artist, max_results=15)
+        await query.edit_message_text(f"🔍 Поиск по запросу: {artist}")
+        videos = search_all(artist, max_results=20)
         if videos:
             context.user_data['search_results'] = videos
             context.user_data['search_page'] = 0
             context.user_data['search_query'] = artist
             await show_page(update, context, 0)
         else:
-            await query.message.reply_text("❌ Ничего не найдено по исполнителю")
+            await query.message.reply_text("❌ Ничего не найдено")
         return
     
     if data.startswith("select_"):
@@ -360,10 +357,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             size_mb = size_bytes / (1024 * 1024)
             size_str = f"{size_mb:.1f} MB"
             
-            # Получаем длительность через ffprobe (если есть)
+            # Получаем длительность
             duration_str = "??:??"
             try:
-                import subprocess
                 result = subprocess.run([
                     'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
                     '-of', 'default=noprint_wrappers=1:nokey=1', file_path
