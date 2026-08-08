@@ -5,12 +5,16 @@ import time
 import yt_dlp
 import subprocess
 import re
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
 # ===================== НАСТРОЙКИ =====================
 BOT_TOKEN = "8649416842:AAFXUmxKqU9zPDA8w8zXglfFf2GUJwAt_g0"
 MUSIC_FOLDER = "/opt/render/project/src/music"
+
+# Для локального запуска (закомментируй строку выше и раскомментируй эту)
+# MUSIC_FOLDER = "D:/MusicBot/music"
 
 # ===================== БАЗА ДАННЫХ =====================
 def init_db():
@@ -45,7 +49,7 @@ def search_song(query):
     conn.close()
     return results
 
-# ===================== ПОИСК НА SPOTIFY =====================
+# ===================== БЫСТРЫЙ ПОИСК =====================
 def search_spotify(query, max_results=20):
     try:
         from spotdl import search
@@ -65,7 +69,6 @@ def search_spotify(query, max_results=20):
         print(f"Ошибка Spotify: {e}")
         return []
 
-# ===================== ПОИСК НА SOUNDCLOUD =====================
 def search_soundcloud(query, max_results=10):
     ydl_opts = {'quiet': True, 'no_warnings': True, 'extract_flat': True, 'socket_timeout': 10}
     try:
@@ -86,7 +89,6 @@ def search_soundcloud(query, max_results=10):
         print(f"Ошибка SoundCloud: {e}")
     return []
 
-# ===================== ПОИСК НА YOUTUBE =====================
 def search_youtube(query, max_results=10):
     ydl_opts = {'quiet': True, 'no_warnings': True, 'extract_flat': True, 'socket_timeout': 10}
     try:
@@ -108,7 +110,6 @@ def search_youtube(query, max_results=10):
         print(f"Ошибка YouTube: {e}")
     return []
 
-# ===================== УНИВЕРСАЛЬНЫЙ ПОИСК =====================
 def search_all(query, max_results=20):
     results = search_spotify(query, max_results)
     if results:
@@ -119,7 +120,7 @@ def search_all(query, max_results=20):
     results = search_youtube(query, max_results)
     return results
 
-# ===================== СКАЧИВАНИЕ (ИСПРАВЛЕННОЕ) =====================
+# ===================== СКАЧИВАНИЕ (УСКОРЕННОЕ) =====================
 async def download_from_spotify(url, title, artist):
     try:
         safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()
@@ -131,7 +132,7 @@ async def download_from_spotify(url, title, artist):
             return safe_title, artist, output_path
         return None, None, None
     except Exception as e:
-        print(f"Ошибка скачивания Spotify: {e}")
+        print(f"Ошибка Spotify: {e}")
         return None, None, None
 
 async def download_from_url(url, title, uploader):
@@ -143,8 +144,9 @@ async def download_from_url(url, title, uploader):
         'no_warnings': True,
         'ignoreerrors': True,
         'nooverwrites': False,
-        'socket_timeout': 30,
-        'retries': 5,
+        'socket_timeout': 20,
+        'retries': 3,
+        'extract_flat': False,
     }
     try:
         safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()
@@ -207,12 +209,12 @@ async def show_page(update, context, page):
     end_idx = min(start_idx + per_page, len(videos))
     page_videos = videos[start_idx:end_idx]
     
-    # МИНИМАЛИСТИЧНЫЙ СПИСОК (как на первом скриншоте)
+    # ТОЧНО КАК НА СКРИНШОТЕ — без эмодзи "Выберите песню:"
     message = "🎵 *Выберите песню:*\n\n"
     for i, video in enumerate(page_videos, start=start_idx + 1):
         message += f"{i}. {video['uploader']} - {video['title']}\n"
     
-    # Кнопки с номерами (только цифры)
+    # Кнопки
     buttons = []
     row = []
     for i in range(start_idx + 1, end_idx + 1):
@@ -223,7 +225,6 @@ async def show_page(update, context, page):
     if row:
         buttons.append(row)
     
-    # Навигация
     nav_buttons = []
     if total_pages > 1:
         nav_buttons.append(InlineKeyboardButton(f"{page + 1} / {total_pages}", callback_data="page_info"))
@@ -233,6 +234,11 @@ async def show_page(update, context, page):
         nav_buttons.append(InlineKeyboardButton("▶️", callback_data=f"page_{page+1}"))
     if nav_buttons:
         buttons.append(nav_buttons)
+    
+    # Кнопка "Искать по исполнителю" как на скриншоте
+    query = context.user_data.get('search_query', '')
+    if query:
+        buttons.append([InlineKeyboardButton(f"🔍 Искать по исполнителю: {query}", callback_data=f"search_artist_{query}")])
     
     buttons.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel")])
     
@@ -257,6 +263,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("page_"):
         page = int(data.split("_")[1])
         await show_page(update, context, page)
+        return
+    if data.startswith("search_artist_"):
+        artist = data.replace("search_artist_", "")
+        await query.edit_message_text(f"🔍 Поиск по запросу: {artist}")
+        videos = search_all(artist, max_results=20)
+        if videos:
+            context.user_data['search_results'] = videos
+            context.user_data['search_page'] = 0
+            context.user_data['search_query'] = artist
+            await show_page(update, context, 0)
+        else:
+            await query.message.reply_text("❌ Ничего не найдено")
         return
     if data.startswith("select_"):
         index = int(data.split("_")[1])
@@ -295,6 +313,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.message.reply_text("❌ Ошибка скачивания. Попробуй другой источник.")
 
+# ===================== ЗАПУСК =====================
 def main():
     init_db()
     if not os.path.exists(MUSIC_FOLDER):
